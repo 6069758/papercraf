@@ -46,9 +46,10 @@ function htmlToText(html) {
 // Free models in order of preference — if one fails, next is tried
 const FREE_MODELS = [
   'google/gemini-2.0-flash-exp:free',
+  'deepseek/deepseek-chat-v3-0324:free',
   'meta-llama/llama-3.3-70b-instruct:free',
-  'mistralai/mistral-7b-instruct:free',
-  'microsoft/phi-3-medium-128k-instruct:free'
+  'qwen/qwen-2.5-72b-instruct:free',
+  'mistralai/mistral-7b-instruct:free'
 ];
 
 async function callAI(systemMsg, userMsg, maxTokens = 6000) {
