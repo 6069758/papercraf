@@ -18,19 +18,27 @@ app.get('/', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — strip HTML tags, collapse whitespace, trim to limit
+// HELPER — preserve structure while removing HTML tags
 // ─────────────────────────────────────────────────────────────
-function cleanAndTrim(html, maxChars = 2000) {
+function htmlToText(html, maxChars = 2500) {
   return html
-    .replace(/<[^>]+>/g, ' ')   // remove all HTML tags
-    .replace(/&nbsp;/g, ' ')    // remove &nbsp;
-    .replace(/\s+/g, ' ')       // collapse whitespace
+    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '[$1]') // mark bold text
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
-    .substring(0, maxChars);    // hard limit
+    .substring(0, maxChars);
 }
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — call Groq with auto-retry on 429
+// HELPER — call Groq with auto-retry
 // ─────────────────────────────────────────────────────────────
 async function callGroq(systemMsg, userMsg, maxTokens = 3000, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -69,7 +77,7 @@ async function callGroq(systemMsg, userMsg, maxTokens = 3000, retries = 3) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Groq ${res.status}: ${errText.substring(0, 200)}`);
   }
-  throw new Error('Still rate limited after retries. Please wait 1 minute and try again.');
+  throw new Error('Rate limited. Please wait 1 minute and try again.');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -86,28 +94,13 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
     if (ext === '.docx' || mimetype.includes('wordprocessingml')) {
       const result = await mammoth.convertToHtml({ buffer });
       html = result.value;
-
     } else if (ext === '.pdf' || mimetype === 'application/pdf') {
       const data = await pdfParse(buffer);
-      html = data.text
-        .split('\n')
-        .map(line => {
-          const t = line.trim();
-          if (!t) return '<p>&nbsp;</p>';
-          if (/^section\s+[a-d]/i.test(t) || /^(instructions?|general\s+instructions?)/i.test(t))
-            return `<p><strong>${t}</strong></p>`;
-          return `<p>${t}</p>`;
-        })
-        .join('\n');
-
+      html = data.text.split('\n').map(l => `<p>${l.trim()}</p>`).join('\n');
     } else if (ext === '.txt') {
-      html = buffer.toString('utf8')
-        .split('\n')
-        .map(l => l.trim() ? `<p>${l}</p>` : '<p>&nbsp;</p>')
-        .join('\n');
-
+      html = buffer.toString('utf8').split('\n').map(l => `<p>${l}</p>`).join('\n');
     } else {
-      return res.status(400).json({ error: 'Unsupported file. Upload .docx or .pdf', success: false });
+      return res.status(400).json({ error: 'Upload .docx or .pdf only', success: false });
     }
 
     res.json({ html, success: true });
@@ -129,42 +122,101 @@ app.post('/api/generate', async (req, res) => {
     if (!process.env.GROQ_API_KEY)
       return res.status(500).json({ error: 'GROQ_API_KEY not set', success: false });
 
-    // Strip HTML and hard-trim to stay under token limit
-    const cleanFormat    = cleanAndTrim(formatHtml, 2000);
+    const cleanFormat    = htmlToText(formatHtml, 2200);
     const cleanQuestions = questions.substring(0, 1500);
 
-    const system = `You are an expert question paper formatter.
-Output ONLY raw HTML with inline CSS. No markdown. No explanation. No code fences.`;
+    const system = `You are an expert school question paper formatter.
+You produce perfectly formatted, print-ready HTML question papers that look exactly like real school exams.
+Output ONLY raw HTML. No markdown. No explanation. No code fences. Nothing else.`;
 
-    const user = `Create a new question paper. Copy the original format EXACTLY. Only replace the questions.
+    const user = `Create a new question paper using the EXACT same format as the original. Only the questions change.
 
-ORIGINAL FORMAT:
+ORIGINAL PAPER FORMAT:
+---
 ${cleanFormat}
+---
 
-NEW QUESTIONS:
+NEW QUESTIONS FROM TEACHER:
+---
 ${cleanQuestions}
+---
 
-RULES:
-1. Copy school name, subject, class, date, time, marks WORD FOR WORD
-2. Copy all section names and instructions WORD FOR WORD
-3. Keep SAME number of questions per section and SAME marks
-4. Continue question numbering across sections
-5. If not enough questions given, write [To be added]
-6. Change ONLY the question text
+STRICT RULES:
+1. Copy school name, exam title, subject, class, date, time, max marks — EXACTLY word for word
+2. Copy section names (Section A, Section B, etc.) — EXACTLY
+3. Copy section instructions (e.g. "Fill in the blanks", "Attempt all") — EXACTLY word for word
+4. Copy general instructions — EXACTLY word for word
+5. Keep the SAME number of questions per section as the original
+6. Keep the SAME marks per question as the original
+7. Distribute ALL the teacher's new questions across sections. Use ALL of them.
+8. Number questions continuously: Q1, Q2, Q3... across all sections
+9. If teacher gave fewer questions than sections need — write [To be added]
+10. ONLY the question text changes — everything else stays the same
 
-HTML OUTPUT:
-<style>@media print{body{margin:0;}}</style>
-<div style="max-width:800px;margin:0 auto;padding:50px;font-family:Arial,sans-serif;font-size:13pt;line-height:1.9;color:#111;">
-  School name: centered, bold, 20pt
-  Exam details: centered
-  <hr style="border:2px solid #000;margin:16px 0;">
-  General instructions: bold heading then numbered list, 11pt
-  Section heading: bold, underlined, 14pt, margin-top:28px
-  Section instructions: italic, 11pt
-  Each question: <p><strong>Q1.</strong> text <span style="float:right;">[2 marks]</span></p>
-  <div style="clear:both;"></div> after each section
-  End: <p style="text-align:center;margin-top:40px;font-weight:bold;">*** End of Question Paper ***</p>
-</div>`;
+HTML FORMAT RULES — follow exactly:
+
+Use this structure for the paper:
+
+<div style="max-width:780px;margin:0 auto;padding:40px;font-family:Arial,sans-serif;font-size:12pt;color:#000;background:#fff;line-height:1.7;">
+
+<!-- HEADER -->
+<p style="text-align:center;font-size:18pt;font-weight:bold;margin:0 0 4px 0;">SCHOOL NAME HERE</p>
+<p style="text-align:center;font-size:13pt;font-weight:bold;margin:0 0 2px 0;">EXAM TITLE HERE</p>
+<p style="text-align:center;margin:0 0 2px 0;">SUBJECT NAME &nbsp;&nbsp;|&nbsp;&nbsp; CLASS HERE</p>
+<hr style="border:none;border-top:2px solid #000;margin:10px 0;">
+<table style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+  <tr>
+    <td style="text-align:left;font-size:11pt;">Time: TIME HERE</td>
+    <td style="text-align:center;font-size:11pt;">Date: DATE HERE</td>
+    <td style="text-align:right;font-size:11pt;">Max Marks: MARKS HERE</td>
+  </tr>
+</table>
+<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">
+  <tr>
+    <td style="font-size:11pt;">Name: ____________________________</td>
+    <td style="font-size:11pt;">Roll No.: ____________</td>
+    <td style="font-size:11pt;">Checked By: ____________</td>
+  </tr>
+</table>
+<hr style="border:none;border-top:1px solid #000;margin:10px 0;">
+
+<!-- GENERAL INSTRUCTIONS -->
+<p style="font-weight:bold;margin:10px 0 4px 0;">General Instructions:</p>
+<ol style="margin:0 0 12px 20px;font-size:11pt;">
+  <li>Each instruction on its own line</li>
+</ol>
+
+<!-- SECTION -->
+<p style="font-weight:bold;font-size:13pt;text-decoration:underline;margin:20px 0 4px 0;">Section A</p>
+<p style="font-style:italic;font-size:11pt;margin:0 0 10px 0;">Section instruction here.</p>
+
+<!-- QUESTIONS — use this table layout for EVERY question, no exceptions -->
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+  <tr>
+    <td style="width:38px;vertical-align:top;font-weight:bold;padding-right:6px;">Q1.</td>
+    <td style="vertical-align:top;">Question text goes here</td>
+    <td style="width:75px;vertical-align:top;text-align:right;white-space:nowrap;font-size:11pt;">[1 mark]</td>
+  </tr>
+</table>
+
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+  <tr>
+    <td style="width:38px;vertical-align:top;font-weight:bold;padding-right:6px;">Q2.</td>
+    <td style="vertical-align:top;">Question text goes here</td>
+    <td style="width:75px;vertical-align:top;text-align:right;white-space:nowrap;font-size:11pt;">[1 mark]</td>
+  </tr>
+</table>
+
+<!-- repeat table for every question -->
+
+<!-- END -->
+<p style="text-align:center;margin-top:40px;font-weight:bold;border-top:1px solid #000;padding-top:10px;">*** End of Question Paper ***</p>
+
+</div>
+
+CRITICAL: Use the TABLE layout for EVERY single question. Never use float:right. Never use span for marks.
+CRITICAL: Place marks on the RIGHT side of each question row, in the third table column.
+CRITICAL: Use ALL the teacher's questions — distribute them across sections proportionally.`;
 
     let output = await callGroq(system, user, 3000);
 
@@ -193,12 +245,13 @@ app.post('/api/export/docx', async (req, res) => {
 
     const fullHtml = `<!DOCTYPE html>
 <html><head><style>
-  body   { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #111; }
-  p      { margin: 6px 0; }
+  body   { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #000; }
+  p      { margin: 4px 0; }
   strong { font-weight: bold; }
   em     { font-style: italic; }
-  hr     { border: 1px solid #000; margin: 10px 0; }
-  ol,ul  { margin: 4px 0 4px 24px; }
+  hr     { border: 1px solid #000; margin: 8px 0; }
+  table  { width: 100%; border-collapse: collapse; }
+  ol,ul  { margin: 4px 0 4px 20px; }
 </style></head>
 <body>${html}</body></html>`;
 
