@@ -18,33 +18,50 @@ app.get('/', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — call Groq
+// HELPER — call Groq with auto-retry on 429
 // ─────────────────────────────────────────────────────────────
-async function callGroq(systemMsg, userMsg, maxTokens = 4096) {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
-      messages: [
-        { role: 'system', content: systemMsg },
-        { role: 'user',   content: userMsg   }
-      ],
-      temperature: 0.0,
-      max_tokens: maxTokens
-    })
-  });
+async function callGroq(systemMsg, userMsg, maxTokens = 4000, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: systemMsg },
+          { role: 'user',   content: userMsg   }
+        ],
+        temperature: 0.0,
+        max_tokens: maxTokens
+      })
+    });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq ${res.status}: ${err.substring(0, 300)}`);
+    // Success
+    if (res.ok) {
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content || '';
+    }
+
+    // Rate limited — wait and retry
+    if (res.status === 429 && attempt < retries) {
+      const errData = await res.json().catch(() => ({}));
+      const msg     = errData?.error?.message || '';
+      // Extract wait seconds from Groq message e.g. "try again in 22.4s"
+      const match   = msg.match(/try again in ([\d.]+)s/i);
+      const wait    = match ? Math.ceil(parseFloat(match[1])) * 1000 : 15000;
+      console.log(`[groq] Rate limited, waiting ${wait}ms then retry ${attempt}/${retries}`);
+      await new Promise(r => setTimeout(r, wait + 1000));
+      continue;
+    }
+
+    // Other error
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Groq ${res.status}: ${errText.substring(0, 200)}`);
   }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
+  throw new Error('Rate limit hit after retries. Please wait 1 minute and try again.');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -56,7 +73,7 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
 
     const { buffer, originalname, mimetype } = req.file;
     const ext = path.extname(originalname).toLowerCase();
-    let html = '';
+    let html  = '';
 
     if (ext === '.docx' || mimetype.includes('wordprocessingml')) {
       const result = await mammoth.convertToHtml({ buffer });
@@ -69,9 +86,8 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
         .map(line => {
           const t = line.trim();
           if (!t) return '<p>&nbsp;</p>';
-          if (/^section\s+[a-d]/i.test(t) || /^(instructions?|general\s+instructions?)/i.test(t)) {
+          if (/^section\s+[a-d]/i.test(t) || /^(instructions?|general\s+instructions?)/i.test(t))
             return `<p><strong>${t}</strong></p>`;
-          }
           return `<p>${t}</p>`;
         })
         .join('\n');
@@ -83,7 +99,7 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
         .join('\n');
 
     } else {
-      return res.status(400).json({ error: 'Unsupported file. Please upload .docx or .pdf', success: false });
+      return res.status(400).json({ error: 'Unsupported file. Upload .docx or .pdf', success: false });
     }
 
     res.json({ html, success: true });
@@ -94,7 +110,7 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 2. GENERATE — 2-step: analyze format → then generate
+// 2. GENERATE — single smart call with retry
 // ─────────────────────────────────────────────────────────────
 app.post('/api/generate', async (req, res) => {
   try {
@@ -105,126 +121,59 @@ app.post('/api/generate', async (req, res) => {
     if (!process.env.GROQ_API_KEY)
       return res.status(500).json({ error: 'GROQ_API_KEY not set', success: false });
 
-    // ── STEP 1: Extract exact structure as JSON ──────────────
-    const analyzeSystem = `You are an expert at reading and analyzing question paper formats.
-Extract the EXACT structure of the paper. Copy all text word for word.
-Return ONLY a valid JSON object. No extra text. No markdown.`;
+    // Trim format to save tokens — take first 4000 chars which has header + sections
+    const trimmedFormat = formatHtml.substring(0, 4000);
 
-    const analyzeUser = `Analyze this question paper and return its exact structure as JSON:
+    const system = `You are an expert question paper formatter for schools and universities.
+You produce perfectly formatted, print-ready HTML question papers.
+You copy all headers, section names, instructions, and marks EXACTLY as given.
+You ONLY change the question text — nothing else.
+Output ONLY raw HTML with inline CSS. Zero markdown. Zero explanation.`;
 
-${formatHtml.substring(0, 6000)}
+    const user = `TASK: Create a new question paper. Copy the original format 100% exactly. Only replace the questions.
 
-Return exactly this JSON format:
-{
-  "header": {
-    "school_name": "exact school name",
-    "exam_title": "exact exam title",
-    "subject": "exact subject name",
-    "class": "exact class or grade",
-    "date": "exact date or [Date]",
-    "time": "exact time allowed",
-    "max_marks": "exact maximum marks",
-    "extra_lines": ["any other header lines word for word"]
-  },
-  "general_instructions": ["instruction 1 word for word", "instruction 2 word for word"],
-  "sections": [
-    {
-      "name": "Section A",
-      "title": "full section title if any",
-      "instructions": ["exact instruction word for word"],
-      "total_questions": 10,
-      "questions_to_attempt": 5,
-      "marks_per_question": "1",
-      "total_marks": 10,
-      "question_type": "MCQ or Short Answer or Long Answer or Project"
-    }
-  ]
-}`;
+━━━ ORIGINAL PAPER FORMAT ━━━
+${trimmedFormat}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    let structure = null;
-    try {
-      const raw      = await callGroq(analyzeSystem, analyzeUser, 1500);
-      const match    = raw.match(/\{[\s\S]*\}/);
-      if (match) structure = JSON.parse(match[0]);
-    } catch (e) {
-      console.warn('[analyze] fallback to raw format:', e.message);
-    }
-
-    // ── STEP 2: Generate the paper ───────────────────────────
-    const generateSystem = `You are an expert question paper formatter for schools.
-You produce perfectly formatted print-ready HTML question papers.
-You follow every instruction with 100% precision.
-Output ONLY raw HTML with inline CSS. No markdown. No explanation. No code fences.`;
-
-    const generateUser = structure ? `
-Create a new question paper using this EXACT structure:
-
-${JSON.stringify(structure, null, 2)}
-
-NEW QUESTIONS FROM TEACHER:
+━━━ NEW QUESTIONS FROM TEACHER ━━━
 ${questions}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-STRICT RULES:
-1. Header — copy every field EXACTLY word for word, same layout, centered
-2. General instructions — copy EXACTLY word for word, same numbering
-3. For each section:
-   - Section name: IDENTICAL
-   - Section instructions: IDENTICAL word for word
-   - Question count: EXACTLY the same number as total_questions
-   - Marks: EXACTLY the same per question
-   - Question numbering: continue from previous section (e.g. Section A ends at 10, Section B starts at 11)
-4. Distribute teacher's new questions across sections proportionally
-5. If teacher gave fewer questions → write "[To be added]" for missing ones
-6. ONLY the question text changes — everything else stays identical
+RULES — follow every single one:
+1. HEADER: Copy school name, exam title, subject, class, date, time, max marks — WORD FOR WORD. Same layout.
+2. INSTRUCTIONS: Copy all general instructions WORD FOR WORD. Same numbering.
+3. SECTIONS: Copy section names and all section instructions WORD FOR WORD.
+4. QUESTION COUNT: Each section must have the EXACT same number of questions as the original.
+5. MARKS: Each question must carry the EXACT same marks as the original.
+6. NUMBERING: Questions continue across sections (Section A: 1-10, Section B: 11-15, etc.)
+7. MISSING QUESTIONS: If teacher provided fewer questions than needed, write "[To be added]".
+8. CHANGE ONLY: The question text itself — nothing else changes.
 
-HTML RULES:
-- Wrapper: <div style="max-width:800px;margin:40px auto;padding:40px;background:#fff;font-family:Arial,sans-serif;font-size:13pt;line-height:1.8;color:#111;">
-- School name: centered, bold, font-size:20pt
-- Exam title + details: centered, font-size:13pt
-- Horizontal line <hr> after header
-- General instructions: font-size:11pt, italic, margin-bottom:20px
-- Section heading: bold, uppercase, underlined, margin-top:24px
-- Section instructions: italic, font-size:11pt, color:#333
-- Each question: margin:10px 0, with question number bold
-- Marks: shown as [X marks] at end of question, float right or in brackets
-- @media print { body { margin: 0; } }
-- End with <p style="text-align:center;margin-top:40px;font-weight:bold;">--- End of Paper ---</p>
-` : `
-Create a new question paper based on this original format:
+HTML OUTPUT RULES:
+- Outer wrapper: <div style="max-width:800px;margin:0 auto;padding:50px;font-family:Arial,sans-serif;font-size:13pt;line-height:1.9;color:#111;background:#fff;">
+- School name: <p style="text-align:center;font-size:20pt;font-weight:bold;margin:0;">SCHOOL NAME</p>
+- Exam details (title, subject, class, date, time, marks): centered, each on its own line
+- Divider after header: <hr style="border:2px solid #000;margin:16px 0;">
+- General instructions heading: <p style="font-weight:bold;margin-top:16px;">General Instructions:</p>
+- Instructions list: <ol> with <li> items, font-size:11pt
+- Section heading: <p style="font-weight:bold;font-size:14pt;text-decoration:underline;margin-top:28px;">SECTION A</p>
+- Section instructions: <p style="font-style:italic;font-size:11pt;color:#444;margin:4px 0 12px;">instructions here</p>
+- Each question: <p style="margin:10px 0;"><strong>Q1.</strong> Question text here <span style="float:right;">[2 marks]</span></p>
+- Clear float after each section: <div style="clear:both;"></div>
+- End of paper: <p style="text-align:center;margin-top:48px;font-weight:bold;">*** End of Question Paper ***</p>
+- Print CSS: <style>@media print{body{margin:0;}div{page-break-inside:avoid;}}</style> at top`;
 
-${formatHtml.substring(0, 6000)}
+    let output = await callGroq(system, user, 4000);
 
-NEW QUESTIONS FROM TEACHER:
-${questions}
-
-RULES:
-1. Copy header EXACTLY — school name, subject, class, date, time, marks — word for word
-2. Copy ALL section headings and instructions EXACTLY word for word
-3. Keep SAME number of questions per section
-4. Keep SAME marks structure
-5. Replace ONLY the question text
-6. Keep identical numbering
-
-HTML RULES:
-- Wrapper: <div style="max-width:800px;margin:40px auto;padding:40px;background:#fff;font-family:Arial,sans-serif;font-size:13pt;line-height:1.8;color:#111;">
-- School name centered and bold
-- Horizontal line after header
-- Section headings bold and underlined
-- Instructions italic
-- Marks in brackets at end
-- End with <p style="text-align:center;margin-top:40px;font-weight:bold;">--- End of Paper ---</p>
-`;
-
-    let output = await callGroq(generateSystem, generateUser, 4096);
-
-    // Strip any markdown fences
+    // Clean markdown fences if any
     output = output
       .replace(/^```html\s*/i, '')
       .replace(/^```\s*/, '')
       .replace(/\s*```$/, '')
       .trim();
 
-    if (!output) throw new Error('AI returned empty response. Please try again.');
+    if (!output) throw new Error('Empty response from AI. Please try again.');
 
     res.json({ html: output, success: true });
   } catch (err) {
@@ -242,19 +191,15 @@ app.post('/api/export/docx', async (req, res) => {
     if (!html) return res.status(400).json({ error: 'No HTML provided' });
 
     const fullHtml = `<!DOCTYPE html>
-<html>
-<head>
-<style>
-  body       { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #111; }
-  h1,h2,h3   { font-family: Arial, sans-serif; }
-  p          { margin: 6px 0; }
-  strong     { font-weight: bold; }
-  em         { font-style: italic; }
-  hr         { border: 1px solid #000; margin: 10px 0; }
-</style>
-</head>
-<body>${html}</body>
-</html>`;
+<html><head><style>
+  body    { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #111; }
+  p       { margin: 6px 0; }
+  strong  { font-weight: bold; }
+  em      { font-style: italic; }
+  hr      { border: 1px solid #000; margin: 10px 0; }
+  ol, ul  { margin: 4px 0 4px 24px; }
+</style></head>
+<body>${html}</body></html>`;
 
     const docxBuffer = await HTMLtoDOCX(fullHtml, null, {
       table:      { row: { cantSplit: true } },
