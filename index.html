@@ -724,7 +724,7 @@ async function generate() {
     document.getElementById('previewFrame').srcdoc =
       `<html><body style="padding:2rem;font-family:sans-serif;color:#DC2626;">
         <strong>Error:</strong> ${err.message}<br><br>
-        <em>Check that your GEMINI_API_KEY is set correctly in the .env file.</em>
+        <em>Check that your OPENROUTER_API_KEY is set correctly in Vercel environment variables.</em>
       </body></html>`;
     toast('Generation failed: ' + err.message, true);
   }
