@@ -46,18 +46,18 @@ function htmlToText(html) {
 // Free models in order of preference — if one fails, next is tried
 const FREE_MODELS = [
   'google/gemini-2.0-flash-exp:free',
-  'deepseek/deepseek-chat-v3-0324:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'qwen/qwen-2.5-72b-instruct:free',
-  'mistralai/mistral-7b-instruct:free'
+  'deepseek/deepseek-r1:free',
+  'meta-llama/llama-3.1-8b-instruct:free',
+  'meta-llama/llama-3.2-3b-instruct:free',
+  'qwen/qwen-2.5-7b-instruct:free'
 ];
 
 async function callAI(systemMsg, userMsg, maxTokens = 6000) {
-  let lastError = '';
+  const errors = [];
 
   for (const model of FREE_MODELS) {
     try {
-      console.log(`[ai] trying model: ${model}`);
+      console.log(`[ai] trying: ${model}`);
 
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -78,33 +78,40 @@ async function callAI(systemMsg, userMsg, maxTokens = 6000) {
         })
       });
 
+      const raw = await res.text();
+
       if (!res.ok) {
-        const err = await res.text();
-        console.warn(`[ai] model ${model} failed: ${res.status}`);
-        lastError = `${res.status}: ${err.substring(0, 100)}`;
-        continue; // try next model
+        const msg = `${model} → ${res.status}: ${raw.substring(0, 120)}`;
+        console.warn(`[ai] FAIL: ${msg}`);
+        errors.push(msg);
+        continue;
       }
 
-      const data = await res.json();
+      let data;
+      try { data = JSON.parse(raw); } catch(e) {
+        errors.push(`${model} → JSON parse failed`);
+        continue;
+      }
+
       const text = data.choices?.[0]?.message?.content || '';
-
       if (!text) {
-        console.warn(`[ai] model ${model} returned empty`);
-        continue; // try next model
+        errors.push(`${model} → empty response`);
+        continue;
       }
 
-      console.log(`[ai] success with model: ${model}`);
+      console.log(`[ai] SUCCESS: ${model}`);
       return text;
 
     } catch (err) {
-      console.warn(`[ai] model ${model} threw: ${err.message}`);
-      lastError = err.message;
-      continue; // try next model
+      const msg = `${model} → ${err.message}`;
+      console.warn(`[ai] ERROR: ${msg}`);
+      errors.push(msg);
     }
   }
 
-  throw new Error(`All models failed. Last error: ${lastError}`);
+  throw new Error('All models failed:\n' + errors.join('\n'));
 }
+
 
 // ─────────────────────────────────────────────────────────────
 // 1. EXTRACT TEXT FROM UPLOADED FILE
