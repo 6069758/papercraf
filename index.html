@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperCraft — Question Paper Formatter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #F0EDE6;
+  --card:      #FFFFFF;
+  --nav:       #141420;
+  --accent:    #E85D2F;
+  --accent2:   #FF8C5A;
+  --hover:     #C94A22;
+  --green:     #0D9E6E;
+  --green-bg:  #EDFAF4;
+  --green-bd:  #A7EDD2;
+  --text:      #18182A;
+  --text2:     #4A4960;
+  --text3:     #9090A8;
+  --border:    #E2DED6;
+  --border2:   #CAC6BC;
+  --surface2:  #F7F5F0;
+  --warn-bg:   #FFFBEB;
+  --warn-bd:   #FDE68A;
+  --warn-text: #92400E;
+  --shadow:    0 4px 24px rgba(0,0,0,.07), 0 1px 4px rgba(0,0,0,.05);
+  --radius:    16px;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── NAV ── */
+nav {
+  background: var(--nav);
+  height: 62px;
+  padding: 0 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.logo {
+  font-family: 'Fraunces', serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -.5px;
+}
+.logo em { color: var(--accent2); font-style: normal; }
+.nav-pill {
+  font-size: 12px;
+  background: rgba(255,255,255,.1);
+  color: rgba(255,255,255,.55);
+  padding: 4px 13px;
+  border-radius: 20px;
+}
+
+/* ── HERO ── */
+.hero {
+  text-align: center;
+  padding: 3.5rem 1.5rem 2.5rem;
+}
+.hero-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #FFF3EE;
+  color: var(--accent);
+  border: 1px solid #FFD0BC;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  margin-bottom: 1.25rem;
+}
+.hero h1 {
+  font-family: 'Fraunces', serif;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+  margin-bottom: .75rem;
+  letter-spacing: -.5px;
+}
+.hero h1 em { color: var(--accent); font-style: normal; }
+.hero p {
+  font-size: 1.05rem;
+  color: var(--text2);
+  max-width: 440px;
+  margin: 0 auto;
+  line-height: 1.65;
+}
+
+/* ── STEPPER ── */
+.stepper {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  max-width: 560px;
+  margin: 0 auto 2.5rem;
+  padding: 0 1.5rem;
+  gap: 0;
+}
+.step-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+.step-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 55%;
+  width: 90%;
+  height: 2px;
+  background: var(--border);
+  transition: background .4s;
+}
+.step-item.done:not(:last-child)::after { background: var(--green); }
+.step-bubble {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  color: var(--text3);
+  position: relative; z-index: 1;
+  transition: all .3s;
+}
+.step-item.active  .step-bubble { background: var(--accent);  border-color: var(--accent);  color: #fff; }
+.step-item.done    .step-bubble { background: var(--green);   border-color: var(--green);   color: #fff; }
+.step-name { font-size: 12.5px; font-weight: 500; color: var(--text3); transition: color .3s; }
+.step-item.active  .step-name { color: var(--accent); }
+.step-item.done    .step-name { color: var(--green); }
+
+/* ── CARD ── */
+.wrap { max-width: 680px; margin: 0 auto; padding: 0 1.25rem 5rem; }
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 2.5rem;
+  display: none;
+}
+.card.show { display: block; animation: rise .35s ease both; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.card-icon { font-size: 2.4rem; margin-bottom: 1rem; display: block; }
+.card-title {
+  font-family: 'Fraunces', serif;
+  font-size: 1.55rem;
+  font-weight: 700;
+  margin-bottom: .4rem;
+  letter-spacing: -.3px;
+}
+.card-desc {
+  font-size: 14.5px;
+  color: var(--text2);
+  line-height: 1.65;
+  margin-bottom: 2rem;
+}
+
+/* ── UPLOAD ZONE ── */
+.drop-zone {
+  border: 2px dashed var(--border2);
+  border-radius: 14px;
+  padding: 4rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  background: var(--surface2);
+  position: relative;
+  transition: all .2s;
+}
+.drop-zone:hover, .drop-zone.over {
+  border-color: var(--accent);
+  background: #FFF6F3;
+}
+.drop-zone input[type=file] {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer;
+  width: 100%; height: 100%;
+}
+.dz-icon { font-size: 3.2rem; margin-bottom: 1rem; display: block; transition: transform .2s; }
+.drop-zone:hover .dz-icon { transform: translateY(-3px); }
+.dz-title { font-size: 1.1rem; font-weight: 700; color: var(--text); margin-bottom: .3rem; }
+.dz-sub   { font-size: 13.5px; color: var(--text3); }
+.dz-badge {
+  display: inline-flex; gap: 5px; margin-top: .9rem;
+  flex-wrap: wrap; justify-content: center;
+}
+.dz-badge span {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  color: var(--text2);
+  font-weight: 500;
+}
+
+/* ── FILE SUCCESS ── */
+.file-success {
+  display: none;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--green-bg);
+  border: 1.5px solid var(--green-bd);
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+}
+.file-success.show { display: flex; }
+.fs-icon { font-size: 2rem; flex-shrink: 0; }
+.fs-name { font-weight: 700; font-size: 15px; color: #065F46; }
+.fs-sub  { font-size: 13px; color: #34D399; margin-top: 2px; }
+.fs-redo { margin-left: auto; font-size: 13px; color: var(--text3); cursor: pointer; white-space: nowrap; }
+.fs-redo:hover { color: var(--accent); text-decoration: underline; }
+
+/* ── TEXTAREA ── */
+.q-area {
+  width: 100%;
+  min-height: 300px;
+  padding: 1.25rem;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--text);
+  resize: vertical;
+  outline: none;
+  transition: border-color .2s;
+  background: var(--card);
+}
+.q-area:focus { border-color: var(--accent); }
+.q-area::placeholder { color: var(--text3); }
+
+/* ── BUTTONS ── */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 26px;
+  border-radius: 10px;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 600;
+  font-size: 14.5px;
+  cursor: pointer;
+  border: none;
+  transition: all .15s;
+  text-decoration: none;
+}
+.btn:active { transform: scale(.98); }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(232,93,47,.35);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: 0 4px 18px rgba(232,93,47,.45);
+  transform: translateY(-1px);
+}
+.btn-primary:disabled { background: var(--border); color: var(--text3); cursor: not-allowed; box-shadow: none; }
+.btn-outline {
+  background: transparent;
+  color: var(--text2);
+  border: 1.5px solid var(--border);
+}
+.btn-outline:hover { background: var(--surface2); border-color: var(--border2); }
+.btn-green {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(13,158,110,.3);
+}
+.btn-green:hover {
+  background: #0B8A60;
+  box-shadow: 0 4px 18px rgba(13,158,110,.4);
+  transform: translateY(-1px);
+}
+.btn-full { width: 100%; justify-content: center; padding: 15px; font-size: 16px; }
+
+/* ── TIP BOX ── */
+.tip {
+  display: flex; align-items: flex-start; gap: 9px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-bd);
+  border-radius: 10px;
+  padding: .85rem 1rem;
+  font-size: 13.5px;
+  color: var(--warn-text);
+  margin-top: 1.25rem;
+  line-height: 1.55;
+}
+.tip-icon { flex-shrink: 0; font-size: 1rem; margin-top: 1px; }
+
+/* ── ROW UTIL ── */
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row-between { justify-content: space-between; }
+
+/* ── LOADING ── */
+.loading {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 3.5rem 2rem;
+  gap: 1.25rem;
+  text-align: center;
+}
+.loading.show { display: flex; }
+
+.spinner-ring {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  border: 4px solid var(--surface2);
+  border-top-color: var(--accent);
+  animation: spin .75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-head { font-family: 'Fraunces', serif; font-size: 1.35rem; font-weight: 600; }
+.loading-sub  { font-size: 14px; color: var(--text3); max-width: 300px; }
+
+.stage-dots { display: flex; gap: 8px; }
+.stage-dot  {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.stage-dot:nth-child(2) { animation-delay: .2s; }
+.stage-dot:nth-child(3) { animation-delay: .4s; }
+@keyframes pulse {
+  0%, 100% { background: var(--border); transform: scale(1); }
+  50%       { background: var(--accent); transform: scale(1.3); }
+}
+
+/* ── PREVIEW ── */
+.preview-section { display: none; }
+.preview-section.show { display: block; }
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.preview-title {
+  font-family: 'Fraunces', serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+.preview-sub { font-size: 13.5px; color: var(--text2); margin-top: 3px; }
+
+.preview-frame {
+  width: 100%;
+  height: 580px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  display: block;
+}
+
+/* ── DIVIDER ── */
+.divider { height: 1px; background: var(--border); margin: 1.75rem 0; }
+
+/* ── TOAST ── */
+.toast {
+  position: fixed;
+  bottom: 2rem; right: 2rem;
+  background: var(--nav);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: all .3s;
+  z-index: 999;
+  max-width: 320px;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.err  { background: #DC2626; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 620px) {
+  .card { padding: 1.5rem; }
+  .drop-zone { padding: 2.5rem 1rem; }
+  .preview-frame { height: 480px; }
+  .hero h1 { font-size: 1.8rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="logo">Paper<em>Craft</em></div>
+  <span class="nav-pill">✨ Free · AI-Powered</span>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-label">🎓 Built for Teachers</div>
+  <h1>Same format,<br><em>new questions.</em></h1>
+  <p>Upload your question paper once. Add new questions. Get the exact same format instantly — ready to print or share.</p>
+</div>
+
+<!-- STEPPER -->
+<div class="stepper">
+  <div class="step-item active" id="s1">
+    <div class="step-bubble" id="b1">1</div>
+    <div class="step-name">Upload Format</div>
+  </div>
+  <div class="step-item" id="s2">
+    <div class="step-bubble" id="b2">2</div>
+    <div class="step-name">Add Questions</div>
+  </div>
+  <div class="step-item" id="s3">
+    <div class="step-bubble" id="b3">3</div>
+    <div class="step-name">Download</div>
+  </div>
+</div>
+
+<!-- CARDS -->
+<div class="wrap">
+
+  <!-- ── STEP 1: UPLOAD ── -->
+  <div class="card show" id="card1">
+    <span class="card-icon">📄</span>
+    <div class="card-title">Upload your question paper</div>
+    <div class="card-desc">
+      Upload any Word (.docx) or PDF of your existing question paper. The AI reads the entire format — header, sections, marks, instructions — and replicates it exactly.
+    </div>
+
+    <!-- Success state -->
+    <div class="file-success" id="fileDone">
+      <span class="fs-icon">✅</span>
+      <div>
+        <div class="fs-name" id="fsName">document.docx</div>
+        <div class="fs-sub">Format extracted — ready to use</div>
+      </div>
+      <span class="fs-redo" onclick="resetFile()">Change file</span>
+    </div>
+
+    <!-- Drop zone -->
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".docx,.pdf,.doc,.txt">
+      <span class="dz-icon" id="dzIcon">📁</span>
+      <div class="dz-title" id="dzTitle">Drop your Word or PDF here</div>
+      <div class="dz-sub" id="dzSub">or click to browse your files</div>
+      <div class="dz-badge">
+        <span>.docx</span><span>.pdf</span><span>.txt</span>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="row row-between">
+      <span style="font-size:13px; color:var(--text3);">
+        🔒 Your file is processed on your server only
+      </span>
+      <button class="btn btn-primary" id="btn1" onclick="goTo(2)" disabled>
+        Next: Add Questions →
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: QUESTIONS ── -->
+  <div class="card" id="card2">
+    <span class="card-icon">✏️</span>
+    <div class="card-title">Type your new questions</div>
+    <div class="card-desc">
+      Paste your questions below — any order, any format. The AI maps them to the right sections and applies the exact format from your uploaded file.
+    </div>
+
+    <textarea
+      class="q-area"
+      id="qInput"
+      placeholder="Just paste your questions here. Examples:
+
+Section A
+1. What is Newton's first law?
+2. Define velocity.
+3. What is the SI unit of force?
+
+Section B
+4. Explain the difference between speed and velocity.
+5. How does friction affect motion?
+
+Section C  
+6. A car travels 120 km in 2 hours. Calculate average speed.
+
+──────────────────────────────
+Or just a plain list — AI will handle the rest!"></textarea>
+
+    <div class="tip">
+      <span class="tip-icon">💡</span>
+      <span>Include section names if you want — or just paste a plain list. You can also add marks in brackets like <strong>(5 marks)</strong>. AI will handle everything else.</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="row row-between">
+      <button class="btn btn-outline" onclick="goTo(1)">← Back</button>
+      <button class="btn btn-primary" onclick="generate()">
+        ✨ Generate My Paper
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: OUTPUT ── -->
+  <div class="card" id="card3">
+
+    <!-- Loading -->
+    <div class="loading" id="loader">
+      <div class="spinner-ring"></div>
+      <div class="loading-head">Formatting your paper...</div>
+      <div class="loading-sub" id="loaderMsg">Reading your format file...</div>
+      <div class="stage-dots">
+        <div class="stage-dot"></div>
+        <div class="stage-dot"></div>
+        <div class="stage-dot"></div>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div class="preview-section" id="result">
+
+      <div class="preview-header">
+        <div>
+          <div class="preview-title">🎉 Your paper is ready!</div>
+          <div class="preview-sub">Preview below — download as Word or save as PDF</div>
+        </div>
+        <div class="row">
+          <button class="btn btn-green" onclick="dlDocx()">⬇ Word (.docx)</button>
+          <button class="btn btn-outline" onclick="dlPdf()">🖨 Save PDF</button>
+        </div>
+      </div>
+
+      <iframe class="preview-frame" id="previewFrame" title="Question paper preview"></iframe>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <button class="btn btn-outline" onclick="goTo(2)">← Edit Questions</button>
+        <button class="btn btn-outline" onclick="startOver()">↩ Start Over</button>
+        <button class="btn btn-primary" style="margin-left:auto;" onclick="generate()">🔄 Regenerate</button>
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- /wrap -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ──────────────────────────────────────────────────
+// STATE
+// ──────────────────────────────────────────────────
+let extractedHtml = '';
+let generatedHtml = '';
+
+const LOAD_MSGS = [
+  'Reading your format file...',
+  'Identifying sections and structure...',
+  'Placing your questions in the right spots...',
+  'Applying marks and instructions...',
+  'Almost done — final polish...',
+];
+
+// ──────────────────────────────────────────────────
+// STEP NAVIGATION
+// ──────────────────────────────────────────────────
+function goTo(n) {
+  [1, 2, 3].forEach(i => {
+    document.getElementById('card' + i).classList.toggle('show', i === n);
+    const s = document.getElementById('s' + i);
+    const b = document.getElementById('b' + i);
+    s.className = 'step-item' + (i === n ? ' active' : i < n ? ' done' : '');
+    b.textContent = i < n ? '✓' : i;
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ──────────────────────────────────────────────────
+// FILE UPLOAD
+// ──────────────────────────────────────────────────
+const fileInput  = document.getElementById('fileInput');
+const dropZone   = document.getElementById('dropZone');
+const dzIcon     = document.getElementById('dzIcon');
+const dzTitle    = document.getElementById('dzTitle');
+const dzSub      = document.getElementById('dzSub');
+
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop',      e => {
+  e.preventDefault();
+  dropZone.classList.remove('over');
+  handleFile(e.dataTransfer.files[0]);
+});
+
+async function handleFile(file) {
+  if (!file) return;
+
+  // Validate
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['docx', 'pdf', 'doc', 'txt'].includes(ext)) {
+    toast('Please upload a .docx or .pdf file', true);
+    return;
+  }
+
+  // Loading state
+  dzIcon.textContent  = '⏳';
+  dzTitle.textContent = 'Extracting format...';
+  dzSub.textContent   = 'Reading ' + file.name;
+  dropZone.style.pointerEvents = 'none';
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+
+    const res  = await fetch('/api/extract', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    extractedHtml = data.html;
+
+    // Show success
+    document.getElementById('fsName').textContent = file.name;
+    document.getElementById('fileDone').classList.add('show');
+    dropZone.style.display = 'none';
+    document.getElementById('btn1').disabled = false;
+    toast('✅ Format extracted successfully!');
+
+  } catch (err) {
+    dzIcon.textContent  = '❌';
+    dzTitle.textContent = 'Upload failed — try again';
+    dzSub.textContent   = err.message;
+    dropZone.style.pointerEvents = '';
+    toast('Error: ' + err.message, true);
+  }
+}
+
+function resetFile() {
+  extractedHtml = '';
+  fileInput.value = '';
+  document.getElementById('fileDone').classList.remove('show');
+  dropZone.style.display = '';
+  dropZone.style.pointerEvents = '';
+  dzIcon.textContent  = '📁';
+  dzTitle.textContent = 'Drop your Word or PDF here';
+  dzSub.textContent   = 'or click to browse your files';
+  document.getElementById('btn1').disabled = true;
+}
+
+// ──────────────────────────────────────────────────
+// GENERATE
+// ──────────────────────────────────────────────────
+async function generate() {
+  const questions = document.getElementById('qInput').value.trim();
+  if (!questions) { toast('Please enter your questions first', true); return; }
+  if (!extractedHtml) { toast('Please upload a format file first', true); goTo(1); return; }
+
+  goTo(3);
+  document.getElementById('loader').classList.add('show');
+  document.getElementById('result').classList.remove('show');
+
+  // Cycle messages
+  let mi = 0;
+  const msgEl = document.getElementById('loaderMsg');
+  const timer = setInterval(() => { msgEl.textContent = LOAD_MSGS[mi++ % LOAD_MSGS.length]; }, 1900);
+
+  try {
+    const res  = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ formatHtml: extractedHtml, questions }),
+    });
+    const data = await res.json();
+    clearInterval(timer);
+    if (!data.success) throw new Error(data.error);
+
+    generatedHtml = data.html;
+
+    document.getElementById('loader').classList.remove('show');
+    document.getElementById('result').classList.add('show');
+
+    // Load preview iframe
+    const iframe = document.getElementById('previewFrame');
+    iframe.srcdoc = `<!DOCTYPE html><html><head><style>
+      body { margin: 2.5rem 3rem; font-family: Arial, sans-serif; font-size: 13pt; line-height: 1.85; color: #111; }
+      @media print { body { margin: 1.5rem 2rem; } }
+    </style></head><body>${generatedHtml}</body></html>`;
+
+  } catch (err) {
+    clearInterval(timer);
+    document.getElementById('loader').classList.remove('show');
+    document.getElementById('result').classList.add('show');
+    document.getElementById('previewFrame').srcdoc =
+      `<html><body style="padding:2rem;font-family:sans-serif;color:#DC2626;">
+        <strong>Error:</strong> ${err.message}<br><br>
+        <em>Check that your GEMINI_API_KEY is set correctly in the .env file.</em>
+      </body></html>`;
+    toast('Generation failed: ' + err.message, true);
+  }
+}
+
+// ──────────────────────────────────────────────────
+// EXPORT
+// ──────────────────────────────────────────────────
+async function dlDocx() {
+  if (!generatedHtml) return;
+  toast('Preparing Word file...');
+  try {
+    const res  = await fetch('/api/export/docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: generatedHtml }),
+    });
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'question_paper.docx';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('✅ Word file downloaded!');
+  } catch (err) {
+    toast('Error: ' + err.message, true);
+  }
+}
+
+function dlPdf() {
+  const iframe = document.getElementById('previewFrame');
+  if (iframe.contentWindow) iframe.contentWindow.print();
+  else toast('Please use the Print button in the preview panel');
+}
+
+// ──────────────────────────────────────────────────
+// UTILS
+// ──────────────────────────────────────────────────
+function startOver() {
+  resetFile();
+  document.getElementById('qInput').value = '';
+  generatedHtml = '';
+  goTo(1);
+}
+
+function toast(msg, isErr = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3200);
+}
+</script>
+</body>
+</html>
