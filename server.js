@@ -11,7 +11,11 @@ const app    = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 app.use(express.json({ limit: '8mb' }));
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, '/')));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // ─────────────────────────────────────────────────────────────
 // 1. EXTRACT TEXT FROM UPLOADED FILE
