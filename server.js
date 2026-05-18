@@ -18,12 +18,15 @@ app.get('/', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — preserve structure while removing HTML tags
+// HELPER — clean HTML to readable plain text
 // ─────────────────────────────────────────────────────────────
-function htmlToText(html, maxChars = 2500) {
+function htmlToText(html) {
   return html
-    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '[$1]') // mark bold text
+    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '$1')
+    .replace(/<b[^>]*>(.*?)<\/b>/gi, '$1')
     .replace(/<\/p>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/td>/gi, ' ')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/li>/gi, '\n')
     .replace(/<li[^>]*>/gi, '- ')
@@ -33,51 +36,73 @@ function htmlToText(html, maxChars = 2500) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .substring(0, maxChars);
+    .trim();
 }
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — call Groq with auto-retry
+// HELPER — call OpenRouter with model fallback
 // ─────────────────────────────────────────────────────────────
-async function callGroq(systemMsg, userMsg, maxTokens = 3000, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
-        messages: [
-          { role: 'system', content: systemMsg },
-          { role: 'user',   content: userMsg   }
-        ],
-        temperature: 0.0,
-        max_tokens: maxTokens
-      })
-    });
 
-    if (res.ok) {
+// Free models in order of preference — if one fails, next is tried
+const FREE_MODELS = [
+  'google/gemini-2.0-flash-exp:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'mistralai/mistral-7b-instruct:free',
+  'microsoft/phi-3-medium-128k-instruct:free'
+];
+
+async function callAI(systemMsg, userMsg, maxTokens = 6000) {
+  let lastError = '';
+
+  for (const model of FREE_MODELS) {
+    try {
+      console.log(`[ai] trying model: ${model}`);
+
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': process.env.APP_URL || 'https://papercraft.vercel.app',
+          'X-Title': 'PaperCraft'
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemMsg },
+            { role: 'user',   content: userMsg   }
+          ],
+          temperature: 0.0,
+          max_tokens: maxTokens
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        console.warn(`[ai] model ${model} failed: ${res.status}`);
+        lastError = `${res.status}: ${err.substring(0, 100)}`;
+        continue; // try next model
+      }
+
       const data = await res.json();
-      return data.choices?.[0]?.message?.content || '';
-    }
+      const text = data.choices?.[0]?.message?.content || '';
 
-    if ((res.status === 429 || res.status === 413) && attempt < retries) {
-      const errData = await res.json().catch(() => ({}));
-      const msg     = errData?.error?.message || '';
-      const match   = msg.match(/try again in ([\d.]+)s/i);
-      const wait    = match ? Math.ceil(parseFloat(match[1])) * 1000 : 20000;
-      console.log(`[groq] ${res.status} — waiting ${wait}ms, retry ${attempt}/${retries}`);
-      await new Promise(r => setTimeout(r, wait + 1000));
-      continue;
-    }
+      if (!text) {
+        console.warn(`[ai] model ${model} returned empty`);
+        continue; // try next model
+      }
 
-    const errText = await res.text().catch(() => '');
-    throw new Error(`Groq ${res.status}: ${errText.substring(0, 200)}`);
+      console.log(`[ai] success with model: ${model}`);
+      return text;
+
+    } catch (err) {
+      console.warn(`[ai] model ${model} threw: ${err.message}`);
+      lastError = err.message;
+      continue; // try next model
+    }
   }
-  throw new Error('Rate limited. Please wait 1 minute and try again.');
+
+  throw new Error(`All models failed. Last error: ${lastError}`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -119,107 +144,114 @@ app.post('/api/generate', async (req, res) => {
 
     if (!formatHtml) return res.status(400).json({ error: 'No format provided', success: false });
     if (!questions)  return res.status(400).json({ error: 'No questions provided', success: false });
-    if (!process.env.GROQ_API_KEY)
-      return res.status(500).json({ error: 'GROQ_API_KEY not set', success: false });
+    if (!process.env.OPENROUTER_API_KEY)
+      return res.status(500).json({ error: 'OPENROUTER_API_KEY not set in environment variables', success: false });
 
-    const cleanFormat    = htmlToText(formatHtml, 2200);
-    const cleanQuestions = questions.substring(0, 1500);
+    const originalText = htmlToText(formatHtml);
 
-    const system = `You are an expert school question paper formatter.
-You produce perfectly formatted, print-ready HTML question papers that look exactly like real school exams.
-Output ONLY raw HTML. No markdown. No explanation. No code fences. Nothing else.`;
+    const system = `You are an expert Indian school question paper formatter.
+You produce perfectly formatted, professional, print-ready HTML question papers.
+You read the original paper carefully and copy ALL details — school name, exam title, subject, class, time, marks, instructions, section names, section instructions — WORD FOR WORD.
+You NEVER invent, guess, or use placeholder text.
+Output ONLY raw HTML with inline CSS. No markdown. No explanation. No code fences.`;
 
-    const user = `Create a new question paper using the EXACT same format as the original. Only the questions change.
+    const user = `Create a new question paper. The format must be IDENTICAL to the original. Only the question text changes.
 
-ORIGINAL PAPER FORMAT:
----
-${cleanFormat}
----
+══════════════════════════════════════
+ORIGINAL PAPER — copy everything from here WORD FOR WORD except questions:
+══════════════════════════════════════
+${originalText}
 
-NEW QUESTIONS FROM TEACHER:
----
-${cleanQuestions}
----
+══════════════════════════════════════
+NEW QUESTIONS — use ALL of these:
+══════════════════════════════════════
+${questions}
 
+══════════════════════════════════════
 STRICT RULES:
-1. Copy school name, exam title, subject, class, date, time, max marks — EXACTLY word for word
-2. Copy section names (Section A, Section B, etc.) — EXACTLY
-3. Copy section instructions (e.g. "Fill in the blanks", "Attempt all") — EXACTLY word for word
-4. Copy general instructions — EXACTLY word for word
-5. Keep the SAME number of questions per section as the original
-6. Keep the SAME marks per question as the original
-7. Distribute ALL the teacher's new questions across sections. Use ALL of them.
-8. Number questions continuously: Q1, Q2, Q3... across all sections
-9. If teacher gave fewer questions than sections need — write [To be added]
-10. ONLY the question text changes — everything else stays the same
+══════════════════════════════════════
+1. School name → EXACT copy from original
+2. Exam title → EXACT copy from original
+3. Subject, Class → EXACT copy from original
+4. Time, Date, Max Marks → EXACT copy from original
+5. Student fields (Name, Roll No, Checked By, Rechecked By) → EXACT copy from original
+6. General Instructions → EXACT copy from original, every word
+7. Each Section name → EXACT copy from original
+8. Each Section instruction → EXACT copy from original, every word
+9. Marks per question → EXACT same as original
+10. Number of questions per section → EXACT same count as original
+11. Use ALL teacher's questions. Distribute proportionally across sections.
+12. Questions numbered continuously: Q1, Q2, Q3... across all sections
+13. NEVER write placeholder text. NEVER invent instructions.
+14. Only the question text itself changes.
 
-HTML FORMAT RULES — follow exactly:
+══════════════════════════════════════
+HTML OUTPUT — build it exactly like this:
+══════════════════════════════════════
 
-Use this structure for the paper:
+The paper must look like a real Indian school printed exam paper with:
 
-<div style="max-width:780px;margin:0 auto;padding:40px;font-family:Arial,sans-serif;font-size:12pt;color:#000;background:#fff;line-height:1.7;">
+OUTER WRAPPER:
+<div style="max-width:780px;margin:0 auto;padding:30px;border:3px double #000;font-family:Arial,sans-serif;font-size:12pt;color:#000;line-height:1.8;background:#fff;">
 
-<!-- HEADER -->
-<p style="text-align:center;font-size:18pt;font-weight:bold;margin:0 0 4px 0;">SCHOOL NAME HERE</p>
-<p style="text-align:center;font-size:13pt;font-weight:bold;margin:0 0 2px 0;">EXAM TITLE HERE</p>
-<p style="text-align:center;margin:0 0 2px 0;">SUBJECT NAME &nbsp;&nbsp;|&nbsp;&nbsp; CLASS HERE</p>
-<hr style="border:none;border-top:2px solid #000;margin:10px 0;">
-<table style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+SCHOOL HEADER (centered):
+- School name: bold, 20pt, ALL CAPS, centered
+- Exam title: bold, 14pt, centered
+- Subject and Class: 12pt, centered
+- Thin HR line: <hr style="border:none;border-top:1.5px solid #000;margin:8px 0;">
+
+TIME / DATE / MARKS ROW (use a table):
+<table style="width:100%;border-collapse:collapse;margin:6px 0;font-size:11pt;">
   <tr>
-    <td style="text-align:left;font-size:11pt;">Time: TIME HERE</td>
-    <td style="text-align:center;font-size:11pt;">Date: DATE HERE</td>
-    <td style="text-align:right;font-size:11pt;">Max Marks: MARKS HERE</td>
+    <td style="text-align:left;">Time: [value from original]</td>
+    <td style="text-align:center;">M.M.: [value from original]</td>
+    <td style="text-align:right;">Date: [value from original]</td>
   </tr>
 </table>
-<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">
+
+STUDENT INFO (use a bordered table):
+<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:11pt;">
   <tr>
-    <td style="font-size:11pt;">Name: ____________________________</td>
-    <td style="font-size:11pt;">Roll No.: ____________</td>
-    <td style="font-size:11pt;">Checked By: ____________</td>
+    <td style="border:1px solid #000;padding:4px 8px;width:40%;">Name: _______________________</td>
+    <td style="border:1px solid #000;padding:4px 8px;width:30%;">Roll No.: ____________</td>
+    <td style="border:1px solid #000;padding:4px 8px;width:30%;">Checked By: __________</td>
   </tr>
 </table>
-<hr style="border:none;border-top:1px solid #000;margin:10px 0;">
 
-<!-- GENERAL INSTRUCTIONS -->
-<p style="font-weight:bold;margin:10px 0 4px 0;">General Instructions:</p>
-<ol style="margin:0 0 12px 20px;font-size:11pt;">
-  <li>Each instruction on its own line</li>
+Thick HR: <hr style="border:none;border-top:2px solid #000;margin:10px 0;">
+
+GENERAL INSTRUCTIONS:
+<p style="font-weight:bold;margin:8px 0 4px;">General Instructions:</p>
+<ol style="margin:0 0 10px 22px;font-size:11pt;line-height:1.7;">
+  [copy each instruction from original as a separate <li>]
 </ol>
 
-<!-- SECTION -->
-<p style="font-weight:bold;font-size:13pt;text-decoration:underline;margin:20px 0 4px 0;">Section A</p>
-<p style="font-style:italic;font-size:11pt;margin:0 0 10px 0;">Section instruction here.</p>
+EACH SECTION:
+<p style="font-weight:bold;font-size:13pt;text-decoration:underline;margin:18px 0 4px;">Section A</p>
+<p style="font-style:italic;font-size:11pt;margin:0 0 10px;">[section instruction from original]</p>
 
-<!-- QUESTIONS — use this table layout for EVERY question, no exceptions -->
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+EACH QUESTION (use this table — no outer border):
+<table style="width:100%;border-collapse:collapse;margin:5px 0;">
   <tr>
-    <td style="width:38px;vertical-align:top;font-weight:bold;padding-right:6px;">Q1.</td>
-    <td style="vertical-align:top;">Question text goes here</td>
-    <td style="width:75px;vertical-align:top;text-align:right;white-space:nowrap;font-size:11pt;">[1 mark]</td>
+    <td style="width:42px;vertical-align:top;font-weight:bold;white-space:nowrap;">Q1.</td>
+    <td style="vertical-align:top;">[question text]</td>
+    <td style="width:72px;vertical-align:top;text-align:right;white-space:nowrap;font-size:11pt;">[1 mark]</td>
   </tr>
 </table>
 
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-  <tr>
-    <td style="width:38px;vertical-align:top;font-weight:bold;padding-right:6px;">Q2.</td>
-    <td style="vertical-align:top;">Question text goes here</td>
-    <td style="width:75px;vertical-align:top;text-align:right;white-space:nowrap;font-size:11pt;">[1 mark]</td>
-  </tr>
-</table>
+For fill-in-the-blank questions use: _______________ inside the sentence.
 
-<!-- repeat table for every question -->
-
-<!-- END -->
-<p style="text-align:center;margin-top:40px;font-weight:bold;border-top:1px solid #000;padding-top:10px;">*** End of Question Paper ***</p>
+CLOSING:
+<hr style="border:none;border-top:1px solid #000;margin:30px 0 8px;">
+<p style="text-align:center;font-weight:bold;font-size:11pt;">*** End of Question Paper ***</p>
 
 </div>
 
-CRITICAL: Use the TABLE layout for EVERY single question. Never use float:right. Never use span for marks.
-CRITICAL: Place marks on the RIGHT side of each question row, in the third table column.
-CRITICAL: Use ALL the teacher's questions — distribute them across sections proportionally.`;
+Now generate the complete paper:`;
 
-    let output = await callGroq(system, user, 3000);
+    let output = await callAI(system, user, 6000);
 
+    // Strip markdown fences if any
     output = output
       .replace(/^```html\s*/i, '')
       .replace(/^```\s*/, '')
@@ -245,13 +277,14 @@ app.post('/api/export/docx', async (req, res) => {
 
     const fullHtml = `<!DOCTYPE html>
 <html><head><style>
-  body   { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #000; }
-  p      { margin: 4px 0; }
-  strong { font-weight: bold; }
-  em     { font-style: italic; }
-  hr     { border: 1px solid #000; margin: 8px 0; }
-  table  { width: 100%; border-collapse: collapse; }
-  ol,ul  { margin: 4px 0 4px 20px; }
+  body  { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #000; }
+  p     { margin: 4px 0; }
+  strong{ font-weight: bold; }
+  em    { font-style: italic; }
+  hr    { border: 1px solid #000; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td    { padding: 3px 6px; }
+  ol,ul { margin: 4px 0 4px 20px; }
 </style></head>
 <body>${html}</body></html>`;
 
@@ -259,7 +292,7 @@ app.post('/api/export/docx', async (req, res) => {
       table:      { row: { cantSplit: true } },
       footer:     false,
       pageNumber: false,
-      margins:    { top: 720, right: 900, bottom: 720, left: 900 }
+      margins:    { top: 600, right: 800, bottom: 600, left: 800 }
     });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -278,7 +311,7 @@ if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`\n✅  PaperCraft running → http://localhost:${PORT}`);
-    console.log(`    Groq Key : ${process.env.GROQ_API_KEY ? '✓ Set' : '✗ MISSING'}\n`);
+    console.log(`    OpenRouter Key: ${process.env.OPENROUTER_API_KEY ? '✓ Set' : '✗ MISSING'}\n`);
   });
 }
 
