@@ -28,7 +28,7 @@ async function callGroq(systemMsg, userMsg, maxTokens = 4096) {
       'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages: [
         { role: 'system', content: systemMsg },
         { role: 'user',   content: userMsg   }
@@ -105,130 +105,119 @@ app.post('/api/generate', async (req, res) => {
     if (!process.env.GROQ_API_KEY)
       return res.status(500).json({ error: 'GROQ_API_KEY not set', success: false });
 
-    // ── STEP 1: Extract the exact structure of the original paper ──
+    // ── STEP 1: Extract exact structure as JSON ──────────────
     const analyzeSystem = `You are an expert at reading and analyzing question paper formats.
-Extract the EXACT structure of the paper provided. Be 100% precise — copy text word for word.
-Return ONLY a JSON object, no other text.`;
+Extract the EXACT structure of the paper. Copy all text word for word.
+Return ONLY a valid JSON object. No extra text. No markdown.`;
 
-    const analyzeUser = `Analyze this question paper and extract its EXACT structure:
+    const analyzeUser = `Analyze this question paper and return its exact structure as JSON:
 
-${formatHtml.substring(0, 8000)}
+${formatHtml.substring(0, 6000)}
 
-Return this exact JSON format:
+Return exactly this JSON format:
 {
   "header": {
-    "school_name": "exact school name from paper",
+    "school_name": "exact school name",
     "exam_title": "exact exam title",
-    "subject": "exact subject",
-    "class": "exact class/grade",
+    "subject": "exact subject name",
+    "class": "exact class or grade",
     "date": "exact date or [Date]",
     "time": "exact time allowed",
     "max_marks": "exact maximum marks",
-    "extra_header_lines": ["any other header lines word for word"]
+    "extra_lines": ["any other header lines word for word"]
   },
   "general_instructions": ["instruction 1 word for word", "instruction 2 word for word"],
   "sections": [
     {
       "name": "Section A",
       "title": "full section title if any",
-      "instructions": ["section instruction 1 word for word"],
+      "instructions": ["exact instruction word for word"],
       "total_questions": 10,
       "questions_to_attempt": 5,
       "marks_per_question": "1",
-      "marks_range": "1-5",
-      "total_marks": 20,
-      "question_style": "MCQ/Short Answer/Long Answer/etc"
+      "total_marks": 10,
+      "question_type": "MCQ or Short Answer or Long Answer or Project"
     }
   ]
 }`;
 
-    let structure;
+    let structure = null;
     try {
-      const analyzeRaw = await callGroq(analyzeSystem, analyzeUser, 2000);
-      const jsonMatch  = analyzeRaw.match(/\{[\s\S]*\}/);
-      structure = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+      const raw      = await callGroq(analyzeSystem, analyzeUser, 1500);
+      const match    = raw.match(/\{[\s\S]*\}/);
+      if (match) structure = JSON.parse(match[0]);
     } catch (e) {
-      console.warn('[analyze] Could not parse structure, using fallback', e.message);
-      structure = null;
+      console.warn('[analyze] fallback to raw format:', e.message);
     }
 
-    // ── STEP 2: Generate the new paper using extracted structure ──
-    const generateSystem = `You are an expert question paper formatter for schools and universities.
-You produce perfectly formatted, print-ready HTML question papers.
-You follow instructions with 100% precision — never skip, never add, never change anything not asked.
-Output ONLY raw HTML with inline CSS. Zero markdown. Zero explanations. Zero code fences.`;
+    // ── STEP 2: Generate the paper ───────────────────────────
+    const generateSystem = `You are an expert question paper formatter for schools.
+You produce perfectly formatted print-ready HTML question papers.
+You follow every instruction with 100% precision.
+Output ONLY raw HTML with inline CSS. No markdown. No explanation. No code fences.`;
 
-    let generateUser;
+    const generateUser = structure ? `
+Create a new question paper using this EXACT structure:
 
-    if (structure) {
-      // Use the precisely extracted structure
-      generateUser = `Create a new question paper using EXACTLY this structure:
-
-PAPER STRUCTURE (extracted from teacher's original):
 ${JSON.stringify(structure, null, 2)}
 
-NEW QUESTIONS TO USE:
+NEW QUESTIONS FROM TEACHER:
 ${questions}
 
-STRICT RULES — every single one must be followed:
-1. HEADER: Copy every field from the structure EXACTLY word for word. Same layout, same order.
-2. GENERAL INSTRUCTIONS: Copy every instruction EXACTLY word for word. Same numbering.
-3. SECTIONS: For each section —
+STRICT RULES:
+1. Header — copy every field EXACTLY word for word, same layout, centered
+2. General instructions — copy EXACTLY word for word, same numbering
+3. For each section:
    - Section name: IDENTICAL
-   - Section title: IDENTICAL  
    - Section instructions: IDENTICAL word for word
-   - Number of questions: EXACTLY the same count
-   - Marks per question: EXACTLY the same
-   - Question numbering: continue from previous section
-4. QUESTIONS: Place the teacher's new questions into the correct sections. Distribute them proportionally.
-   If teacher gave fewer questions than needed → write "[To be added]" for missing ones.
-   If teacher gave more questions than needed → use first N questions for that section.
-5. FORMAT: Professional exam paper look with proper spacing between sections.
+   - Question count: EXACTLY the same number as total_questions
+   - Marks: EXACTLY the same per question
+   - Question numbering: continue from previous section (e.g. Section A ends at 10, Section B starts at 11)
+4. Distribute teacher's new questions across sections proportionally
+5. If teacher gave fewer questions → write "[To be added]" for missing ones
+6. ONLY the question text changes — everything else stays identical
 
-HTML REQUIREMENTS:
-- Full A4 page style: max-width 800px, margin 40px auto, padding 40px, background white
-- Header: centered, bold school name (font-size 18pt), then other details centered
-- Horizontal line under header
-- Section headings: bold, uppercase, underlined
-- Instructions: italic, indented, smaller font
-- Question numbers: bold
-- Marks: shown in brackets at end of question, right-aligned
-- Proper line spacing between questions (margin 10px)
-- Professional font: Arial or Times New Roman
-- Print-ready: @media print included`;
+HTML RULES:
+- Wrapper: <div style="max-width:800px;margin:40px auto;padding:40px;background:#fff;font-family:Arial,sans-serif;font-size:13pt;line-height:1.8;color:#111;">
+- School name: centered, bold, font-size:20pt
+- Exam title + details: centered, font-size:13pt
+- Horizontal line <hr> after header
+- General instructions: font-size:11pt, italic, margin-bottom:20px
+- Section heading: bold, uppercase, underlined, margin-top:24px
+- Section instructions: italic, font-size:11pt, color:#333
+- Each question: margin:10px 0, with question number bold
+- Marks: shown as [X marks] at end of question, float right or in brackets
+- @media print { body { margin: 0; } }
+- End with <p style="text-align:center;margin-top:40px;font-weight:bold;">--- End of Paper ---</p>
+` : `
+Create a new question paper based on this original format:
 
-    } else {
-      // Fallback: use raw HTML directly
-      generateUser = `Create a new question paper.
+${formatHtml.substring(0, 6000)}
 
-ORIGINAL PAPER FORMAT (copy structure exactly):
-${formatHtml.substring(0, 8000)}
-
-NEW QUESTIONS:
+NEW QUESTIONS FROM TEACHER:
 ${questions}
 
 RULES:
-1. Copy the header EXACTLY — school name, subject, class, date, time, marks — word for word
+1. Copy header EXACTLY — school name, subject, class, date, time, marks — word for word
 2. Copy ALL section headings and instructions EXACTLY word for word
-3. Keep the SAME number of questions per section
-4. Keep the SAME marks structure
-5. Replace ONLY the question text with the new questions provided
-6. Keep identical numbering style
+3. Keep SAME number of questions per section
+4. Keep SAME marks structure
+5. Replace ONLY the question text
+6. Keep identical numbering
 
-HTML REQUIREMENTS:
-- Full A4 style: max-width 800px, margin 40px auto, padding 40px, white background
-- Header centered, bold school name
-- Horizontal line under header
+HTML RULES:
+- Wrapper: <div style="max-width:800px;margin:40px auto;padding:40px;background:#fff;font-family:Arial,sans-serif;font-size:13pt;line-height:1.8;color:#111;">
+- School name centered and bold
+- Horizontal line after header
 - Section headings bold and underlined
-- Instructions in italics
-- Marks in brackets
-- Clean spacing, professional look
-- @media print included`;
-    }
+- Instructions italic
+- Marks in brackets at end
+- End with <p style="text-align:center;margin-top:40px;font-weight:bold;">--- End of Paper ---</p>
+`;
 
     let output = await callGroq(generateSystem, generateUser, 4096);
 
-    // Clean up any markdown fences
+    // Strip any markdown fences
     output = output
       .replace(/^```html\s*/i, '')
       .replace(/^```\s*/, '')
@@ -237,7 +226,7 @@ HTML REQUIREMENTS:
 
     if (!output) throw new Error('AI returned empty response. Please try again.');
 
-    res.json({ html: output, structure, success: true });
+    res.json({ html: output, success: true });
   } catch (err) {
     console.error('[generate]', err.message);
     res.status(500).json({ error: err.message, success: false });
@@ -256,12 +245,12 @@ app.post('/api/export/docx', async (req, res) => {
 <html>
 <head>
 <style>
-  body   { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #111; }
-  h1, h2, h3 { font-family: Arial, sans-serif; }
-  p      { margin: 6px 0; }
-  strong { font-weight: bold; }
-  em     { font-style: italic; }
-  hr     { border: 1px solid #000; margin: 10px 0; }
+  body       { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.8; color: #111; }
+  h1,h2,h3   { font-family: Arial, sans-serif; }
+  p          { margin: 6px 0; }
+  strong     { font-weight: bold; }
+  em         { font-style: italic; }
+  hr         { border: 1px solid #000; margin: 10px 0; }
 </style>
 </head>
 <body>${html}</body>
